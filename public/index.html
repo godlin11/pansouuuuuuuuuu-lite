@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>盘搜 Lite — 网盘资源搜索</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --text: #1c1e21;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --brand: #185fa5;
+    --brand-weak: #e6f1fb;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.6;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+  header { text-align: center; margin-bottom: 28px; }
+  header h1 { font-size: 26px; font-weight: 600; letter-spacing: 1px; }
+  header h1 span { color: var(--brand); }
+  header p { color: var(--muted); font-size: 13px; margin-top: 6px; }
+
+  .searchbox { display: flex; gap: 10px; margin-bottom: 14px; }
+  .searchbox input {
+    flex: 1; padding: 13px 18px; font-size: 15px;
+    border: 1px solid var(--line); border-radius: 12px; outline: none; background: var(--card);
+    transition: border-color .15s;
+  }
+  .searchbox input:focus { border-color: var(--brand); }
+  .searchbox button {
+    padding: 13px 28px; font-size: 15px; color: #fff; background: var(--brand);
+    border: none; border-radius: 12px; cursor: pointer; font-weight: 500;
+  }
+  .searchbox button:hover { background: #0c447c; }
+  .searchbox button:disabled { opacity: .5; cursor: not-allowed; }
+
+  .hints { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 24px; }
+  .hints button {
+    padding: 5px 14px; font-size: 13px; color: var(--muted);
+    background: var(--card); border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
+  }
+  .hints button:hover { color: var(--brand); border-color: var(--brand); }
+
+  #status { text-align: center; color: var(--muted); font-size: 14px; min-height: 22px; margin-bottom: 18px; }
+  .spinner {
+    display: inline-block; width: 14px; height: 14px; vertical-align: -2px; margin-right: 8px;
+    border: 2px solid var(--line); border-top-color: var(--brand); border-radius: 50%;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .group { background: var(--card); border: 1px solid var(--line); border-radius: 14px; margin-bottom: 16px; overflow: hidden; }
+  .group-head { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+  .group-head .tag {
+    font-size: 12px; font-weight: 600; color: #fff; padding: 3px 10px; border-radius: 6px;
+  }
+  .group-head .cnt { color: var(--muted); font-size: 13px; }
+  .item { padding: 12px 18px; border-bottom: 1px solid var(--line); }
+  .item:last-child { border-bottom: none; }
+  .item .t { font-size: 14px; margin-bottom: 4px; word-break: break-all;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .item .meta { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  .item .meta .code { color: #854f0b; background: #faeeda; padding: 1px 7px; border-radius: 4px; }
+  .item a.open {
+    margin-left: auto; font-size: 12px; color: var(--brand); text-decoration: none;
+    border: 1px solid var(--brand); padding: 3px 12px; border-radius: 999px; white-space: nowrap;
+  }
+  .item a.open:hover { background: var(--brand-weak); }
+  .item a.copy { margin-left: 8px; font-size: 12px; color: var(--muted); text-decoration: none;
+    border: 1px solid var(--line); padding: 3px 12px; border-radius: 999px; cursor: pointer; background: none; }
+  .item a.copy:hover { border-color: var(--brand); color: var(--brand); }
+  .ops { display: flex; align-items: center; }
+
+  #empty { text-align: center; color: var(--muted); padding: 48px 0; font-size: 14px; display: none; }
+
+  /* 密码遮罩 */
+  #gate { position: fixed; inset: 0; background: var(--bg); display: none;
+    align-items: center; justify-content: center; z-index: 10; }
+  .gate-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 32px; width: min(360px, 90vw); }
+  .gate-card h2 { font-size: 16px; margin-bottom: 12px; }
+  .gate-card input { width: 100%; padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; font-size: 14px; }
+  .gate-card button { width: 100%; padding: 10px; background: var(--brand); color: #fff; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
+  .gate-card .err { color: #a32d2d; font-size: 13px; margin-top: 10px; min-height: 18px; }
+
+  footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 40px; }
+  footer a { color: var(--muted); }
+  @media (max-width: 560px) {
+    .wrap { padding-top: 20px; }
+    header h1 { font-size: 21px; }
+    .searchbox button { padding: 13px 18px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <div class="gate-card">
+    <h2>本站已开启访问密码</h2>
+    <input type="password" id="gateInput" placeholder="输入访问密码" autocomplete="off">
+    <button id="gateBtn">进入</button>
+    <div class="err" id="gateErr"></div>
+  </div>
+</div>
+
+<div class="wrap">
+  <header>
+    <h1>盘搜 <span>Lite</span></h1>
+    <p>聚合 Telegram 公开频道 · 夸克 / 阿里 / 百度 / 迅雷 / 115 / UC / 磁力</p>
+  </header>
+
+  <div class="searchbox">
+    <input id="kw" type="text" placeholder="输入影视、剧集、资料关键词…" autocomplete="off" autofocus>
+    <button id="go">搜索</button>
+  </div>
+
+  <div class="hints" id="hints"></div>
+
+  <div id="status"></div>
+  <div id="empty">没有找到相关资源，换个关键词试试</div>
+  <div id="results"></div>
+
+  <footer>
+    数据来自公开频道，本站不存储任何资源 · 部署于 Vercel
+  </footer>
+</div>
+
+<script>
+(function () {
+  var $kw = document.getElementById('kw');
+  var $go = document.getElementById('go');
+  var $status = document.getElementById('status');
+  var $results = document.getElementById('results');
+  var $empty = document.getElementById('empty');
+  var $hints = document.getElementById('hints');
+  var $gate = document.getElementById('gate');
+
+  var SAMPLES = ['三体', '沙丘', '繁花', 'long leg', '纪录片 地球脉动', '考研', '原神', '4K 蓝光'];
+  var TYPE_COLORS = {
+    quark: '#2f6fd6', aliyun: '#d8701a', baidu: '#3c6cc9', xunlei: '#2178c4',
+    u115: '#1d9e75', uc: '#d4537e', p123: '#534AB7', tianyi: '#0f6e56', magnet: '#5f5e5a'
+  };
+  var currentCtl = null;
+
+  SAMPLES.forEach(function (w) {
+    var b = document.createElement('button');
+    b.textContent = w;
+    b.onclick = function () { $kw.value = w; search(); };
+    $hints.appendChild(b);
+  });
+
+  function esc(s) { return String(s == null ? '' : s); }
+
+  function fmtDate(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d)) return '';
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function copyText(text, btn) {
+    function ok() { btn.textContent = '已复制'; setTimeout(function () { btn.textContent = '复制'; }, 1500); }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(ok);
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta); ok();
+    }
+  }
+
+  function render(data) {
+    $results.innerHTML = '';
+    var items = data.items || [];
+    if (!items.length) { $empty.style.display = 'block'; return; }
+    $empty.style.display = 'none';
+
+    // 按 type 分组
+    var groups = {};
+    items.forEach(function (it) { (groups[it.type] = groups[it.type] || []).push(it); });
+
+    Object.keys(groups).forEach(function (type) {
+      var list = groups[type];
+      var g = document.createElement('div'); g.className = 'group';
+
+      var head = document.createElement('div'); head.className = 'group-head';
+      var tag = document.createElement('span'); tag.className = 'tag';
+      tag.style.background = TYPE_COLORS[type] || '#5f5e5a';
+      tag.textContent = list[0].name || type;
+      var cnt = document.createElement('span'); cnt.className = 'cnt';
+      cnt.textContent = list.length + ' 条';
+      head.appendChild(tag); head.appendChild(cnt);
+      g.appendChild(head);
+
+      list.forEach(function (it) {
+        var row = document.createElement('div'); row.className = 'item';
+
+        var t = document.createElement('div'); t.className = 't'; t.textContent = it.title;
+        row.appendChild(t);
+
+        var meta = document.createElement('div'); meta.className = 'meta';
+        var ch = document.createElement('span'); ch.textContent = '@' + it.channel;
+        var dt = document.createElement('span'); dt.textContent = fmtDate(it.date);
+        meta.appendChild(ch); meta.appendChild(dt);
+        if (it.code) {
+          var cd = document.createElement('span'); cd.className = 'code';
+          cd.textContent = '提取码 ' + it.code;
+          meta.appendChild(cd);
+        }
+
+        var ops = document.createElement('div'); ops.className = 'ops';
+        var isMagnet = it.type === 'magnet';
+        if (!isMagnet) {
+          var a = document.createElement('a'); a.className = 'open';
+          a.href = it.url + (it.code ? (it.url.indexOf('?') > -1 ? '&' : '?') + 'pwd=' + it.code : '');
+          a.target = '_blank'; a.rel = 'noopener noreferrer';
+          a.textContent = '打开';
+          ops.appendChild(a);
+        }
+        var cp = document.createElement('button'); cp.className = 'copy'; cp.textContent = '复制';
+        cp.onclick = function () { copyText(it.url + (it.code ? ' 提取码:' + it.code : ''), cp); };
+        ops.appendChild(cp);
+        meta.appendChild(ops);
+
+        row.appendChild(meta);
+        g.appendChild(row);
+      });
+
+      $results.appendChild(g);
+    });
+  }
+
+  function setStatus(html) { $status.innerHTML = html; }
+
+  function showGate(errText) {
+    $gate.style.display = 'flex';
+    document.getElementById('gateErr').textContent = errText || '';
+    document.getElementById('gateInput').focus();
+  }
+
+  function authHeaders() {
+    var k = localStorage.getItem('pskey');
+    return k ? { 'x-key': k } : {};
+  }
+
+  function search() {
+    var kw = $kw.value.trim();
+    if (!kw) return;
+    if (currentCtl) currentCtl.abort();
+    currentCtl = new AbortController();
+
+    $go.disabled = true;
+    $results.innerHTML = '';
+    $empty.style.display = 'none';
+    setStatus('<span class="spinner"></span>正在聚合搜索 ' + esc(kw) + ' …');
+
+    var t0 = Date.now();
+    fetch('/api/search?kw=' + encodeURIComponent(kw), {
+      headers: authHeaders(),
+      signal: currentCtl.signal
+    })
+    .then(function (r) {
+      if (r.status === 401) { showGate('密码不正确或未输入'); throw new Error('unauthorized'); }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(function (data) {
+      setStatus('共 ' + data.total + ' 条结果 · 来自 ' + data.channels_ok + '/' + data.channels_total +
+        ' 个频道 · 耗时 ' + ((Date.now() - t0) / 1000).toFixed(1) + ' 秒' + (data.cached ? ' · 缓存' : ''));
+      render(data);
+    })
+    .catch(function (e) {
+      if (e.name === 'AbortError') return;
+      if (e.message === 'unauthorized') { setStatus(''); return; }
+      setStatus('搜索失败：' + e.message + '，请稍后重试');
+    })
+    .finally(function () { $go.disabled = false; });
+  }
+
+  $go.onclick = search;
+  $kw.addEventListener('keydown', function (e) { if (e.key === 'Enter') search(); });
+
+  document.getElementById('gateBtn').onclick = function () {
+    var v = document.getElementById('gateInput').value.trim();
+    if (!v) return;
+    localStorage.setItem('pskey', v);
+    $gate.style.display = 'none';
+    search();
+  };
+  document.getElementById('gateInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') document.getElementById('gateBtn').click();
+  });
+
+  // 启动时探活：若开启密码门则先弹遮罩
+  fetch('/api/health').then(function (r) { return r.json(); }).then(function (h) {
+    if (h.password_protected) showGate();
+  }).catch(function () {});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "name": "pansou-lite",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PanSou-Lite: 网盘资源搜索聚合（Vercel Serverless 版）",
+  "engines": {
+    "node": ">=18"
+  }
+}
