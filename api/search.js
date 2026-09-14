@@ -5,7 +5,7 @@
  *   2) 内置搜索插件（api/_lib/plugins/，移植自 fish2018/pansou 的插件生态）
  *
  * 架构要点（为 Vercel Serverless 设计）：
- *  - 无长驻进程：每次请求内完成全部抓取，总预算约 20 秒（maxDuration 30）
+ *  - 无长驻进程：每次请求内完成全部抓取，总预算约 25 秒（maxDuration 30）
  *  - 并发窗口：频道按 30/波滚动执行，防止瞬时并发触发 t.me 限流
  *  - 无磁盘写入：缓存用模块级 Map（热实例复用）+ CDN s-maxage
  *  - 海外函数直连 t.me 与各资源站，无需代理
@@ -15,6 +15,7 @@
  *  - ENABLED_PLUGINS   可选，逗号分隔的插件名（默认全部启用，当前: hunhepan）
  *  - SEARCH_PASSWORD   可选，设置后所有请求需带 header x-key 或 query ?key=
  *  - FETCH_TIMEOUT_MS  可选，单频道/单插件请求超时，默认 6000
+ *  - MAX_RESULTS       可选，去重后返回条数上限，默认 1000，范围 100–2000
  */
 
 const PLUGINS = [
@@ -83,11 +84,26 @@ async function mapLimit(list, limit, fn) {
 
 // ---------- 解析 t.me/s/ 页面 ----------
 
-function parseChannelPage(html, channel) {
-  if (!html || html.indexOf('tgme_widget_message') === -1) return [];
+/**
+ * 解析单页频道 HTML。
+ * @returns {{items:Array, msgCount:number, oldestId:number|null}}
+ *   msgCount: 本页消息条数（接近 20 = 满页，可能还有更多）
+ *   oldestId: 本页最小消息 ID（翻页用 before 参数）
+ */
+function parseChannelPageFull(html, channel) {
+  const empty = { items: [], msgCount: 0, oldestId: null };
+  if (!html || html.indexOf('tgme_widget_message') === -1) return empty;
   const chunks = html.split(/(?=<div class="tgme_widget_message_wrap)/);
   const out = [];
+  let msgCount = 0;
+  let oldestId = null;
   for (const chunk of chunks) {
+    const pm = chunk.match(/data-post="[^"]*\/(\d+)"/);
+    if (pm) {
+      msgCount++;
+      const id = parseInt(pm[1], 10);
+      if (oldestId === null || id < oldestId) oldestId = id;
+    }
     const tm = chunk.match(/<time[^>]*datetime="([^"]+)"/);
     if (!tm) continue;
     const tx = chunk.match(/class="tgme_widget_message_text[^"]*"[^>]*>([\s\S]*?)<\/div>/);
@@ -115,13 +131,19 @@ function parseChannelPage(html, channel) {
       }
     }
   }
-  return out;
+  return { items: out, msgCount, oldestId };
+}
+
+// 兼容接口：只返回 items（本地测试用）
+function parseChannelPage(html, channel) {
+  return parseChannelPageFull(html, channel).items;
 }
 
 // ---------- 抓取 ----------
 
-async function fetchChannel(channel, kw, timeoutMs) {
-  const url = 'https://t.me/s/' + encodeURIComponent(channel) + '?q=' + encodeURIComponent(kw);
+async function fetchTgPage(channel, kw, timeoutMs, beforeId) {
+  let url = 'https://t.me/s/' + encodeURIComponent(channel) + '?q=' + encodeURIComponent(kw);
+  if (beforeId) url += '&before=' + beforeId;
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
@@ -129,14 +151,35 @@ async function fetchChannel(channel, kw, timeoutMs) {
       headers: { 'user-agent': UA, 'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8' },
       signal: ctl.signal
     });
-    if (!res.ok) return [];
-    const html = await res.text();
-    return parseChannelPage(html, channel);
+    if (!res.ok) return null;
+    return await res.text();
   } catch (e) {
-    return [];
+    return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * 抓取单个频道：第一页 + 满页时自动翻第二页（深度翻倍）。
+ * 翻页仅在时间预算充裕（距 deadline > 6s）时进行。
+ */
+async function fetchChannel(channel, kw, timeoutMs, deadline) {
+  const html = await fetchTgPage(channel, kw, timeoutMs, null);
+  if (!html) return [];
+  const page1 = parseChannelPageFull(html, channel);
+  let items = page1.items;
+
+  // 消息数接近满页（t.me/s 每页约 20 条）说明还有更早的结果，翻一页
+  const canPaginate = page1.msgCount >= 18 && page1.oldestId && deadline && (deadline - Date.now()) > 6000;
+  if (canPaginate) {
+    const html2 = await fetchTgPage(channel, kw, Math.min(timeoutMs, 5000), page1.oldestId);
+    if (html2) {
+      const page2 = parseChannelPageFull(html2, channel);
+      if (page2.items.length) items = items.concat(page2.items);
+    }
+  }
+  return items;
 }
 
 // 频道阶段：并发窗口 30/波滚动，总预算 deadline 内尽量多查
@@ -147,7 +190,7 @@ async function fetchAllChannels(channels, kw, timeoutMs, deadline) {
   for (let i = 0; i < channels.length; i += WINDOW) {
     if (Date.now() > deadline) break; // 预算耗尽，剩余频道放弃（缓存下次补）
     const wave = channels.slice(i, i + WINDOW);
-    const results = await Promise.all(wave.map(ch => fetchChannel(ch, kw, timeoutMs)));
+    const results = await Promise.all(wave.map(ch => fetchChannel(ch, kw, timeoutMs, deadline)));
     for (const r of results) {
       if (r.length > 0) { ok++; all.push(...r); }
     }
@@ -243,7 +286,8 @@ module.exports.default = async (req, res) => {
   }
 
   const t0 = Date.now();
-  const deadline = t0 + 20000; // 总预算 20s（maxDuration 30 留余量）
+  const deadline = t0 + 25000; // 总预算 25s（maxDuration 30 留余量）
+  const maxResults = Math.min(Math.max(parseInt(process.env.MAX_RESULTS || '1000', 10), 100), 2000);
 
   // 频道与插件两路并行
   const [chanPhase, plugPhase] = await Promise.all([
@@ -264,7 +308,7 @@ module.exports.default = async (req, res) => {
     seen.add(k);
     if (!it.name) it.name = TYPE_NAMES[it.type] || '其他';
     items.push(it);
-    if (items.length >= 300) break;
+    if (items.length >= maxResults) break;
   }
 
   const data = {
