@@ -48,6 +48,17 @@
   .hints button:hover { color: var(--brand); border-color: var(--brand); }
 
   #status { text-align: center; color: var(--muted); font-size: 14px; min-height: 22px; margin-bottom: 18px; }
+
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 18px; }
+  .filters:empty { display: none; }
+  .fchip {
+    padding: 5px 14px; font-size: 13px; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--muted);
+    transition: all .12s;
+  }
+  .fchip:hover { border-color: var(--brand); color: var(--brand); }
+  .fchip.on { background: var(--brand); color: #fff; border-color: var(--brand); }
+  .fchip b { font-weight: 500; }
   .spinner {
     display: inline-block; width: 14px; height: 14px; vertical-align: -2px; margin-right: 8px;
     border: 2px solid var(--line); border-top-color: var(--brand); border-radius: 50%;
@@ -122,6 +133,7 @@
   <div class="hints" id="hints"></div>
 
   <div id="status"></div>
+  <div class="filters" id="filters"></div>
   <div id="empty">没有找到相关资源，换个关键词试试</div>
   <div id="results"></div>
 
@@ -139,12 +151,21 @@
   var $empty = document.getElementById('empty');
   var $hints = document.getElementById('hints');
   var $gate = document.getElementById('gate');
+  var $filters = document.getElementById('filters');
 
   var SAMPLES = ['三体', '沙丘', '繁花', 'long leg', '纪录片 地球脉动', '考研', '原神', '4K 蓝光'];
   var TYPE_COLORS = {
     quark: '#2f6fd6', aliyun: '#d8701a', baidu: '#3c6cc9', xunlei: '#2178c4',
-    u115: '#1d9e75', uc: '#d4537e', p123: '#534AB7', tianyi: '#0f6e56', magnet: '#5f5e5a'
+    u115: '#1d9e75', uc: '#d4537e', p123: '#534AB7', tianyi: '#0f6e56',
+    mobile: '#854f0b', pikpak: '#993556', magnet: '#5f5e5a', others: '#888780'
   };
+  var TYPE_LABELS = {
+    quark: '夸克网盘', aliyun: '阿里云盘', baidu: '百度网盘', xunlei: '迅雷云盘',
+    u115: '115网盘', uc: 'UC网盘', p123: '123网盘', tianyi: '天翼云盘',
+    mobile: '移动云盘', pikpak: 'PikPak', magnet: '磁力链接', others: '其他'
+  };
+  var FIXED_ORDER = ['quark', 'aliyun', 'baidu', 'xunlei', 'u115', 'uc', 'p123', 'tianyi', 'mobile', 'pikpak', 'magnet', 'others'];
+  var currentFilter = 'all';
   var currentCtl = null;
 
   SAMPLES.forEach(function (w) {
@@ -176,22 +197,28 @@
 
   function render(data) {
     $results.innerHTML = '';
+    $filters.innerHTML = '';
+    currentFilter = 'all';
     var items = data.items || [];
     if (!items.length) { $empty.style.display = 'block'; return; }
     $empty.style.display = 'none';
 
-    // 按 type 分组
+    // 按类型分组，并按固定顺序展示
     var groups = {};
     items.forEach(function (it) { (groups[it.type] = groups[it.type] || []).push(it); });
+    var orderedTypes = FIXED_ORDER.filter(function (t) { return groups[t]; });
+    Object.keys(groups).forEach(function (t) {
+      if (orderedTypes.indexOf(t) === -1) orderedTypes.push(t);
+    });
 
-    Object.keys(groups).forEach(function (type) {
+    orderedTypes.forEach(function (type) {
       var list = groups[type];
-      var g = document.createElement('div'); g.className = 'group';
+      var g = document.createElement('div'); g.className = 'group'; g.dataset.type = type;
 
       var head = document.createElement('div'); head.className = 'group-head';
       var tag = document.createElement('span'); tag.className = 'tag';
       tag.style.background = TYPE_COLORS[type] || '#5f5e5a';
-      tag.textContent = list[0].name || type;
+      tag.textContent = list[0].name || TYPE_LABELS[type] || type;
       var cnt = document.createElement('span'); cnt.className = 'cnt';
       cnt.textContent = list.length + ' 条';
       head.appendChild(tag); head.appendChild(cnt);
@@ -233,6 +260,37 @@
 
       $results.appendChild(g);
     });
+
+    buildFilters(orderedTypes, groups);
+  }
+
+  // 筛选条：全部 + 各网盘类型（带数量），点击只显示对应分组
+  function buildFilters(orderedTypes, groups) {
+    function chip(label, type, count) {
+      var b = document.createElement('button');
+      b.className = 'fchip' + (type === currentFilter ? ' on' : '');
+      b.dataset.key = type;
+      b.innerHTML = label + ' <b>' + count + '</b>';
+      b.onclick = function () { setFilter(type); };
+      return b;
+    }
+    var total = orderedTypes.reduce(function (s, t) { return s + groups[t].length; }, 0);
+    $filters.appendChild(chip('全部', 'all', total));
+    orderedTypes.forEach(function (t) {
+      $filters.appendChild(chip(TYPE_LABELS[t] || t, t, groups[t].length));
+    });
+  }
+
+  function setFilter(type) {
+    currentFilter = type;
+    var chips = $filters.children;
+    for (var i = 0; i < chips.length; i++) {
+      chips[i].className = 'fchip' + ((i === 0 && type === 'all') || chips[i].dataset.key === type ? ' on' : '');
+    }
+    var groups = $results.querySelectorAll('.group');
+    for (var j = 0; j < groups.length; j++) {
+      groups[j].style.display = (type === 'all' || groups[j].dataset.type === type) ? '' : 'none';
+    }
   }
 
   function setStatus(html) { $status.innerHTML = html; }
